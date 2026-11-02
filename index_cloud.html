@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCEAN MONITORING CLOUD</title>
+<script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #04070c;
+    --panel: rgba(13, 22, 34, 0.55);
+    --line: rgba(34, 211, 238, 0.16);
+    --line-bright: rgba(34, 211, 238, 0.45);
+    --cyan: #22d3ee;
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --text: #dbe7f0;
+    --dim: #5b7a94;
+    --mono: 'Consolas', 'SF Mono', 'JetBrains Mono', 'Courier New', monospace;
+    --sans: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(ellipse 80% 60% at 50% -10%, rgba(34,211,238,0.08), transparent 60%),
+      linear-gradient(180deg, #05080d 0%, #04070c 100%);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 22px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(34,211,238,0.06), transparent);
+    flex-shrink: 0;
+  }
+  header .brand { display: flex; align-items: baseline; gap: 14px; }
+  header .brand .en {
+    font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: 4px;
+    color: var(--cyan); text-shadow: 0 0 12px rgba(34,211,238,0.5);
+    animation: breathe 3s ease-in-out infinite;
+  }
+  header .brand .cn { font-size: 13px; color: var(--dim); letter-spacing: 6px; }
+  header .status { display: flex; align-items: center; gap: 18px; font-family: var(--mono); font-size: 13px; color: var(--dim); }
+  header .status .online { display: flex; align-items: center; gap: 6px; color: var(--green); }
+  header .status .online .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite;
+  }
+  header .status .offline { color: var(--red); display: flex; align-items: center; gap: 6px; }
+  header .status .offline .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 8px var(--red); }
+  header .status .clock { font-size: 20px; color: var(--cyan); font-variant-numeric: tabular-nums; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes breathe { 0%,100% { text-shadow: 0 0 8px rgba(34,211,238,0.35); } 50% { text-shadow: 0 0 22px rgba(34,211,238,0.8); } }
+
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 250px 1fr 300px;
+    gap: 12px;
+    padding: 12px 16px;
+    min-height: 0;
+  }
+
+  .panel {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+    animation: panelGlow 4s ease-in-out infinite;
+  }
+  .panel::before, .panel::after { content: ''; position: absolute; width: 10px; height: 10px; pointer-events: none; }
+  .panel::before { top: -1px; left: -1px; border-top: 2px solid var(--cyan); border-left: 2px solid var(--cyan); }
+  .panel::after { bottom: -1px; right: -1px; border-bottom: 2px solid var(--cyan); border-right: 2px solid var(--cyan); }
+  @keyframes panelGlow { 0%,100% { box-shadow: inset 0 0 0 rgba(34,211,238,0); } 50% { box-shadow: inset 0 0 28px rgba(34,211,238,0.05); } }
+  .panel .ptitle {
+    flex-shrink: 0; padding: 10px 14px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 3px; color: var(--cyan);
+    border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel .ptitle .zh { color: var(--dim); font-family: var(--sans); font-size: 11px; letter-spacing: 2px; }
+
+  #left { display: flex; flex-direction: column; }
+  #archive { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .buoy {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px; border: 1px solid var(--line); cursor: pointer;
+    transition: all .18s; font-family: var(--mono);
+  }
+  .buoy .id { color: var(--text); letter-spacing: 1px; }
+  .buoy .id span { color: var(--cyan); }
+  .buoy .loc { font-size: 10px; color: var(--dim); }
+  .buoy:hover { border-color: var(--line-bright); background: rgba(34,211,238,0.05); }
+  .buoy.active { border-color: var(--cyan); background: rgba(34,211,238,0.08); box-shadow: inset 2px 0 0 var(--cyan); }
+  .buoy.active .id { color: var(--cyan); }
+  #detail {
+    flex-shrink: 0; padding: 12px 14px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--dim); line-height: 1.9;
+  }
+  #detail .row { display: flex; justify-content: space-between; }
+  #detail .row .k { color: var(--dim); }
+  #detail .row .v { color: var(--text); }
+  #detail .row .v.cyan { color: var(--cyan); }
+
+  #mapwrap { position: relative; }
+  #map { width: 100%; height: 100%; }
+  #mapwrap .legend {
+    position: absolute; right: 12px; top: 44px; z-index: 3;
+    font-family: var(--mono); font-size: 10px; color: var(--dim);
+    border: 1px solid var(--line); padding: 6px 8px; background: rgba(4,7,12,0.6);
+  }
+
+  #stream { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .metric { border: 1px solid var(--line); padding: 12px 14px; position: relative; transition: border-color .2s; }
+  .metric::before { content: ''; position: absolute; left: 0; top: 0; width: 3px; height: 100%; background: var(--cyan); opacity: 0.5; }
+  .metric .en { font-family: var(--mono); font-size: 10px; letter-spacing: 2px; color: var(--dim); }
+  .metric .val { font-family: var(--mono); font-size: 30px; font-weight: 700; color: var(--text); margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+  .metric .unit { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .metric .bar { margin-top: 8px; height: 3px; background: rgba(34,211,238,0.1); position: relative; overflow: hidden; }
+  .metric .bar i { position: absolute; left: 0; top: 0; height: 100%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); transition: width .6s; }
+  .metric.bad { border-color: var(--red); }
+  .metric.bad::before { background: var(--red); }
+  .metric.bad .val { color: var(--red); }
+
+  footer {
+    flex-shrink: 0; height: 220px; border-top: 1px solid var(--line);
+    margin: 0 16px 12px; position: relative; background: var(--panel);
+  }
+  footer::before, footer::after { content: ''; position: absolute; width: 10px; height: 10px; pointer-events: none; }
+  footer::before { top: -1px; left: -1px; border-top: 2px solid var(--cyan); border-left: 2px solid var(--cyan); }
+  footer::after { bottom: -1px; right: -1px; border-bottom: 2px solid var(--cyan); border-right: 2px solid var(--cyan); }
+  footer .ftitle { position: absolute; top: 10px; left: 16px; z-index: 3; font-family: var(--mono); font-size: 12px; letter-spacing: 3px; color: var(--cyan); }
+  .metric-btns { position: absolute; top: 10px; right: 14px; z-index: 3; display: flex; gap: 6px; }
+  .mbtn {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 1px; padding: 4px 12px;
+    cursor: pointer; color: var(--dim); border: 1px solid var(--line); background: transparent; transition: all .18s;
+  }
+  .mbtn:hover { color: var(--cyan); border-color: var(--line-bright); }
+  .mbtn.active { color: #04070c; background: var(--cyan); border-color: var(--cyan); font-weight: 700; }
+  #trend { width: 100%; height: 100%; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); font-family: var(--mono); font-size: 13px; letter-spacing: 2px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="en">OCEAN MONITORING CLOUD</span>
+      <span class="cn">海洋监测 · 云端实时</span>
+    </div>
+    <div class="status">
+      <span id="conn" class="offline"><span class="dot"></span>CONNECTING…</span>
+      <span id="date">----/--/--</span>
+      <span class="clock" id="clock">--:--:--</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="panel" id="left">
+      <div class="ptitle"><span>BUOY ARCHIVE</span><span class="zh">浮标档案</span></div>
+      <div id="archive"><div class="empty">NO SIGNAL</div></div>
+      <div id="detail"><div class="empty">SELECT A BUOY</div></div>
+    </div>
+
+    <div class="panel" id="mapwrap">
+      <div class="ptitle"><span>MARINE SITUATION</span><span class="zh">海域态势</span></div>
+      <div id="map"></div>
+      <div class="legend">◉ BUOY NODE</div>
+    </div>
+
+    <div class="panel" id="right">
+      <div class="ptitle"><span>DATA STREAM</span><span class="zh">实时数据流</span></div>
+      <div id="stream"><div class="empty">WAITING…</div></div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="ftitle">REALTIME TREND</div>
+    <div class="metric-btns" id="mbtns"></div>
+    <div id="trend"></div>
+  </footer>
+
+<script>
+// ===== 指标定义 =====
+const METRICS = {
+  temp:  { en: 'AIR TEMP',    name: '气温', unit: '℃',   color: '#22d3ee', min: -10, max: 45 },
+  wt:    { en: 'WATER TEMP',  name: '水温', unit: '℃',   color: '#4ade80', min: -5,  max: 40 },
+  hum:   { en: 'HUMIDITY',    name: '湿度', unit: '%',   color: '#a78bfa', min: 0,   max: 100 },
+  press: { en: 'PRESSURE',    name: '气压', unit: 'hPa', color: '#fbbf24', min: 900, max: 1100 },
+  tds:   { en: 'TDS',         name: 'TDS',  unit: 'ppm', color: '#f472b6', min: 0,   max: 2000 },
+};
+const THRESHOLD = { temp: [-40, 85], hum: [0, 100], press: [800, 1100], tds: [0, 2000], wt: [-10, 60] };
+const GROUPS = [
+  { label: '温度', keys: ['temp', 'wt'] },
+  { label: '湿度', keys: ['hum'] },
+  { label: '气压', keys: ['press'] },
+  { label: 'TDS',  keys: ['tds'] },
+];
+
+const MAX_POINTS = 120;   // 前端缓存点数（约 4 分钟）
+let latest = {};          // 每个浮标最新数据
+let series = {};          // 每个浮标时间序列缓存
+let currentBuoy = null;
+let currentGroup = 0;
+
+const mapChart = echarts.init(document.getElementById('map'));
+const trendChart = echarts.init(document.getElementById('trend'));
+
+let roaming = false, roamTimer = null;
+mapChart.on('georoam', () => { roaming = true; clearTimeout(roamTimer); roamTimer = setTimeout(() => { roaming = false; }, 500); });
+
+const TERMINAL_TOOLTIP = {
+  backgroundColor: 'rgba(4, 7, 12, 0.92)',
+  borderColor: 'rgba(34, 211, 238, 0.55)',
+  borderWidth: 1,
+  padding: [8, 12],
+  textStyle: { color: '#dbe7f0', fontFamily: 'Microsoft YaHei', fontSize: 12 },
+  extraCssText: 'box-shadow: 0 0 14px rgba(34,211,238,0.3);',
+};
+
+// ===== 时钟 =====
+setInterval(() => {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  document.getElementById('clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  document.getElementById('date').textContent = `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())}`;
+}, 1000);
+
+// ===== 指标切换按钮 =====
+GROUPS.forEach((g, i) => {
+  const b = document.createElement('div');
+  b.className = 'mbtn' + (i === currentGroup ? ' active' : '');
+  b.textContent = g.label;
+  b.onclick = () => { currentGroup = i; renderBtns(); drawTrend(); };
+  document.getElementById('mbtns').appendChild(b);
+});
+function renderBtns() { document.querySelectorAll('.mbtn').forEach((b, i) => b.classList.toggle('active', i === currentGroup)); }
+
+// ===== 地图 geoJSON（CDN 加载，失败则退纯散点）=====
+let chinaReady = false;
+fetch('https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/json/china.json')
+  .then(r => r.json())
+  .then(geo => { echarts.registerMap('china', geo); chinaReady = true; drawMap(); })
+  .catch(() => { chinaReady = false; drawMap(); });
+
+let mapInited = false;
+function drawMap() {
+  const pts = Object.entries(latest).map(([bid, d]) => ({
+    name: '#' + bid.replace('#', ''),
+    value: [d.lon, d.lat],
+    temp: d.temp, tds: d.tds,
+  }));
+  const lon = pts.map(p => p.value[0]), lat = pts.map(p => p.value[1]);
+  const cx = lon.length ? (Math.min(...lon) + Math.max(...lon)) / 2 : 119.4;
+  const cy = lat.length ? (Math.min(...lat) + Math.max(...lat)) / 2 : 32.2;
+
+  const tooltip = {
+    ...TERMINAL_TOOLTIP,
+    formatter: p => `<div style="line-height:1.8">` +
+      `<span style="color:#22d3ee">■ ${p.name}</span><br>` +
+      `LON  ${p.value[0].toFixed(5)}<br>` +
+      `LAT  ${p.value[1].toFixed(5)}<br>` +
+      `TEMP ${p.data.temp}℃<br>` +
+      `TDS  ${p.data.tds}ppm</div>`,
+  };
+
+  if (chinaReady) {
+    if (!mapInited) {
+      mapChart.setOption({
+        backgroundColor: 'transparent', tooltip,
+        geo: { map: 'china', roam: true, zoom: 3, center: [cx, cy],
+          itemStyle: { areaColor: '#0a1620', borderColor: 'rgba(34,211,238,0.4)', borderWidth: 0.8 },
+          emphasis: { itemStyle: { areaColor: '#12283a' }, label: { color: '#22d3ee' } },
+          label: { show: false } },
+        series: [{ name: 'buoy', type: 'scatter', coordinateSystem: 'geo', data: pts, symbolSize: 14,
+          itemStyle: { color: '#22d3ee', shadowBlur: 16, shadowColor: '#22d3ee' },
+          label: { show: true, formatter: '{b}', position: 'top', color: '#dbe7f0', fontSize: 11, fontFamily: 'Microsoft YaHei' } }],
+      }, { notMerge: true });
+      mapInited = true;
+    } else {
+      mapChart.setOption({ series: [{ data: pts }] });
+    }
+  } else {
+    const span = Math.max(Math.max(...lon) - Math.min(...lon), Math.max(...lat) - Math.min(...lat), 0.2) * 1.7;
+    mapChart.setOption({
+      backgroundColor: 'transparent', tooltip,
+      grid: { left: 46, right: 30, top: 40, bottom: 34 },
+      xAxis: { type: 'value', min: cx - span, max: cx + span, axisLabel: { color: '#5b7a94', fontSize: 10, fontFamily: 'Microsoft YaHei' }, axisLine: { lineStyle: { color: 'rgba(34,211,238,0.3)' } }, splitLine: { lineStyle: { color: 'rgba(34,211,238,0.08)' } } },
+      yAxis: { type: 'value', min: cy - span, max: cy + span, axisLabel: { color: '#5b7a94', fontSize: 10, fontFamily: 'Microsoft YaHei' }, axisLine: { lineStyle: { color: 'rgba(34,211,238,0.3)' } }, splitLine: { lineStyle: { color: 'rgba(34,211,238,0.08)' } } },
+      series: [{ type: 'scatter', symbolSize: 18, data: pts,
+        itemStyle: { color: '#22d3ee', shadowBlur: 16, shadowColor: '#22d3ee', opacity: 0.9 },
+        label: { show: true, formatter: '{b}', position: 'top', color: '#dbe7f0', fontSize: 11, fontFamily: 'Microsoft YaHei' } }],
+    }, { notMerge: true });
+  }
+}
+
+// ===== 渲染 =====
+function renderArchive() {
+  const box = document.getElementById('archive');
+  const ids = Object.keys(latest);
+  if (!ids.length) { box.innerHTML = '<div class="empty">NO SIGNAL</div>'; return; }
+  if (!currentBuoy || !latest[currentBuoy]) currentBuoy = ids[0];
+  box.innerHTML = '';
+  ids.forEach(bid => {
+    const d = latest[bid];
+    const el = document.createElement('div');
+    el.className = 'buoy' + (bid === currentBuoy ? ' active' : '');
+    el.innerHTML = `<span class="id"><span>#</span>${bid.replace('#','')}</span>
+                    <span class="loc">${d.lon.toFixed(2)},${d.lat.toFixed(2)}</span>`;
+    el.onclick = () => { currentBuoy = bid; renderArchive(); renderDetail(); drawTrend(); };
+    box.appendChild(el);
+  });
+}
+
+function renderDetail() {
+  const box = document.getElementById('detail');
+  if (!currentBuoy || !latest[currentBuoy]) { box.innerHTML = '<div class="empty">SELECT A BUOY</div>'; return; }
+  const d = latest[currentBuoy];
+  const rows = [
+    ['ARCHIVE', '#' + currentBuoy.replace('#','')],
+    ['LAT', d.lat.toFixed(5) + '°N'],
+    ['LON', d.lon.toFixed(5) + '°E'],
+    ['TIME', d.ts],
+  ];
+  box.innerHTML = rows.map(r => `<div class="row"><span class="k">${r[0]}</span><span class="v ${r[0]==='ARCHIVE'?'cyan':''}">${r[1]}</span></div>`).join('');
+}
+
+function renderStream() {
+  const box = document.getElementById('stream');
+  if (!currentBuoy || !latest[currentBuoy]) { box.innerHTML = '<div class="empty">WAITING…</div>'; return; }
+  const d = latest[currentBuoy];
+  const pct = key => Math.max(0, Math.min(100, (d[key] - METRICS[key].min) / (METRICS[key].max - METRICS[key].min) * 100));
+  const cards = [];
+  for (const key of ['temp', 'wt', 'hum', 'press', 'tds']) {
+    const m = METRICS[key], lo = THRESHOLD[key][0], hi = THRESHOLD[key][1];
+    const state = d[key] < lo || d[key] > hi ? 'bad' : '';
+    cards.push(`<div class="metric ${state}">
+      <div class="en">${m.en}</div>
+      <div class="val">${d[key]}<span class="unit"> ${m.unit}</span></div>
+      <div class="bar"><i style="width:${pct(key)}%"></i></div>
+    </div>`);
+  }
+  box.innerHTML = cards.join('');
+}
+
+function drawTrend() {
+  if (!currentBuoy) return;
+  const data = series[currentBuoy] || [];
+  const keys = GROUPS[currentGroup].keys;
+  trendChart.setOption({
+    backgroundColor: 'transparent',
+    grid: { left: 60, right: 28, top: 48, bottom: 30 },
+    tooltip: { trigger: 'axis', ...TERMINAL_TOOLTIP },
+    legend: { top: 28, textStyle: { color: '#dbe7f0', fontFamily: 'Microsoft YaHei', fontSize: 11 }, data: keys.map(k => METRICS[k].name) },
+    xAxis: {
+      type: 'time',
+      axisLabel: { color: '#5b7a94', fontSize: 10, fontFamily: 'Microsoft YaHei', formatter: v => { const d = new Date(v); const p = n => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; } },
+      axisLine: { lineStyle: { color: 'rgba(34,211,238,0.3)' } },
+    },
+    yAxis: { type: 'value', axisLabel: { color: '#5b7a94', fontFamily: 'Microsoft YaHei' }, splitLine: { lineStyle: { color: 'rgba(34,211,238,0.08)' } } },
+    series: keys.map(k => ({
+      name: METRICS[k].name, type: 'line', smooth: true, showSymbol: false,
+      lineStyle: { color: METRICS[k].color, width: 2, shadowBlur: 8, shadowColor: METRICS[k].color },
+      itemStyle: { color: METRICS[k].color },
+      areaStyle: { color: METRICS[k].color, opacity: 0.08 },
+      data: data.map(d => [Date.parse(d.ts.replace(' ', 'T')), d[k]]),
+    })),
+  }, { notMerge: true });
+}
+
+// ===== MQTT 连接公共 broker =====
+const BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
+const client = mqtt.connect(BROKER_URL, {
+  clientId: 'cloud-web-' + Math.random().toString(16).slice(2, 10),
+  clean: true,
+  connectTimeout: 4000,
+  reconnectPeriod: 3000,
+});
+
+function setConn(state, text) {
+  const el = document.getElementById('conn');
+  el.className = state;   // 'online' | 'offline'
+  el.innerHTML = `<span class="dot"></span>${text}`;
+}
+
+client.on('connect', () => {
+  setConn('online', 'CLOUD ONLINE');
+  client.subscribe('buoy/#', { qos: 0 });
+});
+
+client.on('reconnect', () => setConn('offline', 'RECONNECTING…'));
+client.on('close', () => setConn('offline', 'OFFLINE'));
+client.on('error', () => setConn('offline', 'OFFLINE'));
+
+client.on('message', (topic, payload) => {
+  let data;
+  try { data = JSON.parse(payload.toString()); } catch (e) { return; }
+  if (!data || !data.buoy) return;
+
+  const bid = data.buoy;   // '#01'
+  latest[bid] = data;
+  if (!series[bid]) series[bid] = [];
+  series[bid].push(data);
+  if (series[bid].length > MAX_POINTS) series[bid].shift();
+
+  renderArchive();
+  renderDetail();
+  renderStream();
+  if (!roaming) drawMap();
+  drawTrend();
+});
+</script>
+</body>
+</html>
